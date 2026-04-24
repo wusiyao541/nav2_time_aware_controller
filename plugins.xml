@@ -1,0 +1,10 @@
+<library path="nav2_time_aware_controller">
+  <class
+    name="nav2_time_aware_controller::TimeAwareLQRController"
+    type="nav2_time_aware_controller::TimeAwareLQRController"
+    base_class_type="nav2_core::Controller">
+    <description>
+      A time-aware Nav2 controller plugin using Frenet-frame finite-horizon LQR for longitudinal, lateral, and heading tracking.
+    </description>
+  </class>
+</library>

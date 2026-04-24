@@ -1,0 +1,72 @@
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.10
+      movement_time_allowance: 20.0
+
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      stateful: True
+      xy_goal_tolerance: 0.18
+      yaw_goal_tolerance: 3.14
+
+    FollowPath:
+      plugin: "nav2_time_aware_controller::TimeAwareLQRController"
+      desired_total_time: 20.0
+      controller_frequency: 10.0
+
+      max_v: 0.30
+      min_tracking_v: 0.06
+      max_w: 1.0
+      max_accel: 0.35
+      max_decel: 0.55
+      max_angular_accel: 1.8
+      command_filter_alpha: 0.8
+
+      q_s: 1.0
+      q_y: 12.0
+      q_psi: 8.0
+      r_v: 3.0
+      r_w: 2.5
+      qf_s: 2.0
+      qf_y: 16.0
+      qf_psi: 10.0
+      lqr_horizon_steps: 20
+      max_delta_v: 0.12
+      max_delta_w: 0.8
+
+      goal_tolerance: 0.18
+      goal_slowdown_dist: 0.35
+      goal_approach_dist: 0.45
+      goal_approach_gain: 0.35
+      goal_heading_gain: 1.0
+      goal_heading_stop_angle: 0.8
+      min_goal_approach_v: 0.02
+      max_goal_approach_v: 0.08
+      max_goal_approach_w: 0.4
+      near_path_end_dist: 0.3
+
+      allow_overtime: true
+      fastest_tracking_v: 0.18
+      min_overtime_horizon: 5.0
+
+      allow_progress_backtracking: false
+      max_backtrack_dist: 0.05
+
+      invert_lateral_error_sign: false
+      invert_heading_error_sign: false
+      invert_delta_w_sign: false
+
+      debug: true
+      debug_csv_path: ""
