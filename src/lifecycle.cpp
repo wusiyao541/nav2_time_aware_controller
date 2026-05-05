@@ -59,8 +59,8 @@ void TimeAwareLQRController::configure(
     node->declare_parameter("controller_frequency", server_frequency);
   }
 
-  desired_total_time_ = declareOrGetParameter(
-    node, plugin_name_ + ".desired_total_time", desired_total_time_);
+  desired_segment_time_ = declareOrGetParameter(
+    node, plugin_name_ + ".desired_segment_time", desired_segment_time_);
   controller_frequency_ = declareOrGetParameter(
     node, plugin_name_ + ".controller_frequency", server_frequency);
   max_v_ = declareOrGetParameter(node, plugin_name_ + ".max_v", max_v_);
@@ -73,6 +73,8 @@ void TimeAwareLQRController::configure(
     node, plugin_name_ + ".max_angular_accel", max_angular_accel_);
   command_filter_alpha_ = declareOrGetParameter(
     node, plugin_name_ + ".command_filter_alpha", command_filter_alpha_);
+  time_aggressiveness_ = declareOrGetParameter(
+    node, plugin_name_ + ".time_aggressiveness", time_aggressiveness_);
 
   q_s_ = declareOrGetParameter(node, plugin_name_ + ".q_s", q_s_);
   q_y_ = declareOrGetParameter(node, plugin_name_ + ".q_y", q_y_);
@@ -130,31 +132,31 @@ void TimeAwareLQRController::configure(
   debug_csv_path_ = declareOrGetParameter(
     node, plugin_name_ + ".debug_csv_path", debug_csv_path_);
 
-  if (desired_total_time_ <= 0.0) {
+  if (desired_segment_time_ <= 0.0) {
     RCLCPP_WARN(
       node->get_logger(),
-      "%s desired_total_time must be positive. Falling back to 20.0 s.",
+      "%s desired_segment_time must be positive. Using 20.0 s.",
       plugin_name_.c_str());
-    desired_total_time_ = 20.0;
+    desired_segment_time_ = 20.0;
   }
   if (controller_frequency_ <= 0.0) {
     RCLCPP_WARN(
       node->get_logger(),
-      "%s controller_frequency must be positive. Falling back to 10.0 Hz.",
+      "%s controller_frequency must be positive. Using 10.0 Hz.",
       plugin_name_.c_str());
     controller_frequency_ = 10.0;
   }
   if (max_v_ <= 0.0) {
     RCLCPP_WARN(
       node->get_logger(),
-      "%s max_v must be positive. Falling back to 0.30 m/s.",
+      "%s max_v must be positive. Using 0.38 m/s.",
       plugin_name_.c_str());
-    max_v_ = 0.30;
+    max_v_ = 0.38;
   }
   if (max_w_ <= 0.0) {
     RCLCPP_WARN(
       node->get_logger(),
-      "%s max_w must be positive. Falling back to 1.0 rad/s.",
+      "%s max_w must be positive. Using 1.0 rad/s.",
       plugin_name_.c_str());
     max_w_ = 1.0;
   }
@@ -164,6 +166,7 @@ void TimeAwareLQRController::configure(
   max_decel_ = std::max(0.0, max_decel_);
   max_angular_accel_ = std::max(0.0, max_angular_accel_);
   command_filter_alpha_ = clamp(command_filter_alpha_, 0.0, 1.0);
+  time_aggressiveness_ = clamp(time_aggressiveness_, 1.0, 1.5);
   q_s_ = std::max(0.0, q_s_);
   q_y_ = std::max(0.0, q_y_);
   q_psi_ = std::max(0.0, q_psi_);
@@ -212,9 +215,25 @@ void TimeAwareLQRController::configure(
 
   RCLCPP_INFO(
     node->get_logger(),
-    "Configured %s as Frenet LQR controller | desired_total_time=%.2f s, "
+    "Configured %s as Frenet LQR controller | desired_segment_time=%.2f s, "
     "controller_frequency=%.2f Hz, max_v=%.2f m/s, max_w=%.2f rad/s",
-    plugin_name_.c_str(), desired_total_time_, controller_frequency_, max_v_, max_w_);
+    plugin_name_.c_str(), desired_segment_time_, controller_frequency_, max_v_, max_w_);
+  RCLCPP_INFO(
+    node->get_logger(),
+    "%s loaded speed params | max_v=%.3f, min_tracking_v=%.3f, "
+    "fastest_tracking_v=%.3f, time_aggressiveness=%.3f, max_accel=%.3f, max_decel=%.3f, "
+    "max_w=%.3f, max_angular_accel=%.3f, command_filter_alpha=%.3f",
+    plugin_name_.c_str(), max_v_, min_tracking_v_, fastest_tracking_v_,
+    time_aggressiveness_, max_accel_, max_decel_, max_w_, max_angular_accel_,
+    command_filter_alpha_);
+  RCLCPP_INFO(
+    node->get_logger(),
+    "%s loaded goal slowdown params | goal_tolerance=%.3f, goal_slowdown_dist=%.3f, "
+    "goal_approach_dist=%.3f, min_goal_approach_v=%.3f, max_goal_approach_v=%.3f, "
+    "near_path_end_dist=%.3f, allow_overtime=%s, min_overtime_horizon=%.3f",
+    plugin_name_.c_str(), goal_tolerance_, goal_slowdown_dist_, goal_approach_dist_,
+    min_goal_approach_v_, max_goal_approach_v_, near_path_end_dist_,
+    allow_overtime_ ? "true" : "false", min_overtime_horizon_);
 }
 
 void TimeAwareLQRController::cleanup()
@@ -284,6 +303,35 @@ void TimeAwareLQRController::resetCommandState()
   have_last_cmd_time_ = false;
 }
 
+void TimeAwareLQRController::refreshDesiredSegmentTimeParameter()
+{
+  auto node = node_.lock();
+  if (!node) {
+    return;
+  }
+
+  double desired_segment_time = desired_segment_time_;
+  if (!node->get_parameter(plugin_name_ + ".desired_segment_time", desired_segment_time)) {
+    return;
+  }
+
+  if (desired_segment_time <= 0.0) {
+    RCLCPP_WARN(
+      node->get_logger(),
+      "%s desired_segment_time must be positive. Keeping %.2f s.",
+      plugin_name_.c_str(), desired_segment_time_);
+    return;
+  }
+
+  if (std::abs(desired_segment_time - desired_segment_time_) > kEps) {
+    RCLCPP_INFO(
+      node->get_logger(),
+      "%s updated desired_segment_time to %.2f s.",
+      plugin_name_.c_str(), desired_segment_time);
+  }
+  desired_segment_time_ = desired_segment_time;
+}
+
 void TimeAwareLQRController::setPlan(const nav_msgs::msg::Path & path)
 {
   auto node = node_.lock();
@@ -329,6 +377,7 @@ void TimeAwareLQRController::setPlan(const nav_msgs::msg::Path & path)
   computePathTangents();
   computePathCurvatures();
 
+  refreshDesiredSegmentTimeParameter();
   updateControllerGoalFromPlan(global_plan_, now);
 
   if (!task_started_) {
@@ -338,15 +387,15 @@ void TimeAwareLQRController::setPlan(const nav_msgs::msg::Path & path)
   plan_start_time_ = now;
 
   const double task_elapsed = std::max(0.0, (now - task_start_time_).seconds());
-  double requested_time = desired_total_time_;
+  double segment_time = desired_segment_time_;
   if (task_elapsed > 0.0) {
-    requested_time = desired_total_time_ - task_elapsed;
+    segment_time = desired_segment_time_ - task_elapsed;
   }
-  if (requested_time <= 0.0 && !allow_overtime_) {
-    requested_time = path_s_.back() / std::max(max_v_, kEps);
+  if (segment_time <= 0.0 && !allow_overtime_) {
+    segment_time = path_s_.back() / std::max(max_v_, kEps);
   }
 
-  generateReferenceTrajectory(requested_time);
+  generateReferenceTrajectory(segment_time);
 
   valid_plan_ = !reference_traj_.empty();
 
@@ -374,10 +423,10 @@ void TimeAwareLQRController::setPlan(const nav_msgs::msg::Path & path)
   RCLCPP_INFO(
     node->get_logger(),
     "%s accepted plan with %zu poses, length %.3f m, task_elapsed %.2f s, "
-    "requested_time %.2f s, reference_horizon %.2f s, mode %s, "
+    "segment_time %.2f s, reference_horizon %.2f s, mode %s, "
     "path_end_to_controller_goal %.3f m.",
     plugin_name_.c_str(), global_plan_.poses.size(), path_s_.back(), task_elapsed,
-    requested_time, reference_traj_.empty() ? 0.0 : reference_traj_.back().t,
+    segment_time, reference_traj_.empty() ? 0.0 : reference_traj_.back().t,
     plan_fastest_mode_ ? "INFEASIBLE_TIME_TRACKING" : "NORMAL_LQR_TRACKING",
     computePathEndToControllerGoalDistance());
 }
@@ -400,8 +449,8 @@ void TimeAwareLQRController::setSpeedLimit(const double & speed_limit, const boo
     auto node = node_.lock();
     if (node) {
       const double task_elapsed = std::max(0.0, (node->now() - task_start_time_).seconds());
-      const double requested_time = desired_total_time_ - task_elapsed;
-      generateReferenceTrajectory(requested_time);
+      const double segment_time = desired_segment_time_ - task_elapsed;
+      generateReferenceTrajectory(segment_time);
     }
   }
 }

@@ -23,16 +23,17 @@ controller_server:
 
     FollowPath:
       plugin: "nav2_time_aware_controller::TimeAwareLQRController"
-      desired_total_time: 20.0
+      desired_segment_time: 20.0
       controller_frequency: 10.0
 
-      max_v: 0.30
+      max_v: 0.38
       min_tracking_v: 0.06
       max_w: 1.0
-      max_accel: 0.35
-      max_decel: 0.55
+      max_accel: 0.60
+      max_decel: 0.80
       max_angular_accel: 1.8
-      command_filter_alpha: 0.8
+      command_filter_alpha: 0.9
+      time_aggressiveness: 1.15
 
       q_s: 1.0
       q_y: 12.0
@@ -47,18 +48,18 @@ controller_server:
       max_delta_w: 0.8
 
       goal_tolerance: 0.18
-      goal_slowdown_dist: 0.35
-      goal_approach_dist: 0.45
-      goal_approach_gain: 0.35
+      goal_slowdown_dist: 0.30
+      goal_approach_dist: 0.34
+      goal_approach_gain: 0.55
       goal_heading_gain: 1.0
       goal_heading_stop_angle: 0.8
-      min_goal_approach_v: 0.02
-      max_goal_approach_v: 0.08
+      min_goal_approach_v: 0.08
+      max_goal_approach_v: 0.14
       max_goal_approach_w: 0.4
-      near_path_end_dist: 0.3
+      near_path_end_dist: 0.22
 
       allow_overtime: true
-      fastest_tracking_v: 0.18
+      fastest_tracking_v: 0.38
       min_overtime_horizon: 5.0
 
       allow_progress_backtracking: false

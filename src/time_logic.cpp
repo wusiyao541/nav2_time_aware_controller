@@ -9,7 +9,7 @@
 namespace nav2_time_aware_controller
 {
 
-void TimeAwareLQRController::generateReferenceTrajectory(double requested_time)
+void TimeAwareLQRController::generateReferenceTrajectory(double segment_time)
 {
   reference_traj_.clear();
   plan_fastest_mode_ = false;
@@ -20,23 +20,23 @@ void TimeAwareLQRController::generateReferenceTrajectory(double requested_time)
     return;
   }
 
-  double horizon = requested_time;
+  double horizon = segment_time;
   double v_ref = 0.0;
 
-  if (requested_time <= kEps) {
+  if (segment_time <= kEps) {
     plan_fastest_mode_ = true;
     v_ref = clamp(fastest_tracking_v_, min_tracking_v_, max_v_);
     horizon = std::max(path_length / std::max(v_ref, kEps), min_overtime_horizon_);
   } else {
-    v_ref = path_length / requested_time;
+    v_ref = path_length / segment_time;
     if (v_ref > max_v_) {
       auto node = node_.lock();
       if (node) {
         RCLCPP_WARN(
           node->get_logger(),
-          "%s desired_total_time/requested_time %.2f s is physically infeasible for %.3f m: "
+          "%s requested segment time %.2f s is physically infeasible for %.3f m: "
           "required_avg_speed %.3f m/s exceeds max_v %.3f m/s. Using fastest feasible timing.",
-          plugin_name_.c_str(), requested_time, path_length, v_ref, max_v_);
+          plugin_name_.c_str(), segment_time, path_length, v_ref, max_v_);
       }
       v_ref = max_v_;
       horizon = path_length / std::max(v_ref, kEps);

@@ -52,11 +52,12 @@ public:
 private:
   void resetPlanState();
   void resetCommandState();
+  void refreshDesiredSegmentTimeParameter();
 
   bool computePathArcLengths();
   void computePathTangents();
   void computePathCurvatures();
-  void generateReferenceTrajectory(double requested_time);
+  void generateReferenceTrajectory(double segment_time);
 
   geometry_msgs::msg::Point samplePathAtArcLength(double s) const;
   double sampleYawAtArcLength(double s) const;
@@ -138,16 +139,17 @@ private:
   mutable size_t last_closest_segment_idx_ {0};
   mutable double last_projected_s_ {0.0};
 
-  double desired_total_time_ {20.0};
+  double desired_segment_time_ {20.0};
   double controller_frequency_ {10.0};
-  double max_v_ {0.3};
-  double original_max_v_ {0.3};
+  double max_v_ {0.38};
+  double original_max_v_ {0.38};
   double min_tracking_v_ {0.06};
   double max_w_ {1.0};
-  double max_accel_ {0.25};
-  double max_decel_ {0.45};
+  double max_accel_ {0.60};
+  double max_decel_ {0.80};
   double max_angular_accel_ {1.2};
-  double command_filter_alpha_ {0.6};
+  double command_filter_alpha_ {0.9};
+  double time_aggressiveness_ {1.15};
 
   double q_s_ {1.0};
   double q_y_ {12.0};
@@ -162,18 +164,18 @@ private:
   double max_delta_w_ {0.8};
 
   double goal_tolerance_ {0.18};
-  double goal_slowdown_dist_ {0.35};
-  double goal_approach_dist_ {0.45};
-  double goal_approach_gain_ {0.4};
+  double goal_slowdown_dist_ {0.30};
+  double goal_approach_dist_ {0.34};
+  double goal_approach_gain_ {0.55};
   double goal_heading_gain_ {1.0};
   double goal_heading_stop_angle_ {0.8};
-  double min_goal_approach_v_ {0.02};
-  double max_goal_approach_v_ {0.08};
+  double min_goal_approach_v_ {0.08};
+  double max_goal_approach_v_ {0.14};
   double max_goal_approach_w_ {0.4};
-  double near_path_end_dist_ {0.3};
+  double near_path_end_dist_ {0.22};
 
   bool allow_overtime_ {true};
-  double fastest_tracking_v_ {0.18};
+  double fastest_tracking_v_ {0.38};
   double min_overtime_horizon_ {5.0};
 
   bool allow_progress_backtracking_ {false};

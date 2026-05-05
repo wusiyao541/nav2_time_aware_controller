@@ -39,8 +39,8 @@ geometry_msgs::msg::TwistStamped TimeAwareLQRController::computeVelocityCommands
   const double path_end_to_controller_goal = computePathEndToControllerGoalDistance();
   const bool goal_checker_reached = goal_checker && have_controller_goal_ &&
     goal_checker->isGoalReached(pose.pose, controller_goal_pose_, velocity);
-  const bool fallback_goal_reached = !goal_checker && distance_to_goal <= goal_tolerance_;
-  if (goal_checker_reached || fallback_goal_reached) {
+  const bool distance_goal_reached = !goal_checker && distance_to_goal <= goal_tolerance_;
+  if (goal_checker_reached || distance_goal_reached) {
     resetCommandState();
     last_cmd_time_ = stamp;
     have_last_cmd_time_ = true;
@@ -51,7 +51,7 @@ geometry_msgs::msg::TwistStamped TimeAwareLQRController::computeVelocityCommands
         "path_end_to_controller_goal %.3f, stop_reason %s",
         plugin_name_.c_str(), modeToString(ControlMode::GOAL_REACHED),
         distance_to_goal, distance_to_path_end, path_end_to_controller_goal,
-        goal_checker_reached ? "goal_checker" : "fallback_distance");
+        goal_checker_reached ? "goal_checker" : "distance_tolerance");
     }
     return makeZeroCommand(stamp);
   }
@@ -62,6 +62,17 @@ geometry_msgs::msg::TwistStamped TimeAwareLQRController::computeVelocityCommands
   const bool reference_exhausted = plan_elapsed >= reference_traj_.back().t;
   const ProjectionResult projection = projectPoseToPath(pose);
   const double path_length = path_s_.empty() ? 0.0 : path_s_.back();
+  const double path_remaining = path_length > kEps ?
+    clamp(path_length - projection.s, 0.0, path_length) : 0.0;
+  const double requested_time_remaining = std::max(0.0, desired_segment_time_ - task_elapsed);
+  const double required_average_speed = requested_time_remaining > kEps ?
+    path_remaining / requested_time_remaining : 0.0;
+  const double expected_s = desired_segment_time_ > kEps ?
+    clamp(path_length * task_elapsed / desired_segment_time_, 0.0, path_length) : path_length;
+  const double schedule_error_s = expected_s - projection.s;
+  const double aggressive_speed_before_clamp = required_average_speed * time_aggressiveness_;
+  const double aggressive_speed_after_clamp = clamp(
+    aggressive_speed_before_clamp, min_tracking_v_, max_v_);
   const bool near_path_end =
     path_length > kEps && projection.s >= path_length - near_path_end_dist_;
 
@@ -71,12 +82,14 @@ geometry_msgs::msg::TwistStamped TimeAwareLQRController::computeVelocityCommands
   {
     mode = ControlMode::GOAL_APPROACH;
   } else if (plan_fastest_mode_ || reference_exhausted ||
-    (allow_overtime_ && task_elapsed > desired_total_time_))
+    (allow_overtime_ && task_elapsed > desired_segment_time_))
   {
     mode = ControlMode::INFEASIBLE_TIME_TRACKING;
   }
 
   ReferencePoint reference = sampleReferenceAtTime(plan_elapsed);
+  const double raw_desired_linear_speed = reference.v;
+  bool time_aggressiveness_applied = false;
   if (mode == ControlMode::INFEASIBLE_TIME_TRACKING) {
     reference.s = projection.s;
     reference.v = clamp(fastest_tracking_v_, min_tracking_v_, max_v_);
@@ -92,7 +105,17 @@ geometry_msgs::msg::TwistStamped TimeAwareLQRController::computeVelocityCommands
     reference.yaw = projection.yaw;
     reference.kappa = projection.kappa;
     reference.w = reference.kappa * reference.v;
+  } else if (
+    requested_time_remaining > kEps &&
+    schedule_error_s > 0.05 &&
+    aggressive_speed_after_clamp > reference.v + kEps)
+  {
+    reference.v = aggressive_speed_after_clamp;
+    reference.w = reference.kappa * reference.v;
+    time_aggressiveness_applied = true;
   }
+  const double speed_after_time_logic = reference.v;
+  const double speed_after_curvature_limit = reference.v;
 
   const double robot_yaw = tf2::getYaw(pose.pose.orientation);
   double e_s = clamp(projection.s, 0.0, path_length) - clamp(reference.s, 0.0, path_length);
@@ -126,7 +149,9 @@ geometry_msgs::msg::TwistStamped TimeAwareLQRController::computeVelocityCommands
 
   double v_cmd = reference.v + delta_v;
   double w_cmd = w_ref + delta_w;
+  const double speed_after_lqr = v_cmd;
   bool goal_approach_translation_allowed = true;
+  bool heading_error_limited = false;
 
   if (mode == ControlMode::GOAL_APPROACH) {
     const auto & goal = have_controller_goal_ ?
@@ -139,6 +164,7 @@ geometry_msgs::msg::TwistStamped TimeAwareLQRController::computeVelocityCommands
     if (std::abs(heading_error_to_goal) > goal_heading_stop_angle_) {
       v_cmd = 0.0;
       goal_approach_translation_allowed = false;
+      heading_error_limited = true;
     } else {
       const double heading_scale = std::max(0.0, std::cos(heading_error_to_goal));
       v_cmd = clamp(
@@ -154,6 +180,7 @@ geometry_msgs::msg::TwistStamped TimeAwareLQRController::computeVelocityCommands
 
   v_cmd = clamp(v_cmd, 0.0, max_v_);
   w_cmd = clamp(w_cmd, -max_w_, max_w_);
+  const double speed_after_max_limit = v_cmd;
 
   if (mode == ControlMode::GOAL_APPROACH) {
     const double slowdown_scale = goal_slowdown_dist_ > kEps ?
@@ -170,8 +197,10 @@ geometry_msgs::msg::TwistStamped TimeAwareLQRController::computeVelocityCommands
       v_cmd = std::max(v_cmd, std::min(min_tracking_v_, max_v_));
     }
   }
+  const double speed_after_goal_slowdown = v_cmd;
 
   v_cmd = applyAccelerationLimit(v_cmd, last_v_cmd_, max_decel_, max_accel_, control_dt);
+  const double speed_after_accel_limit = v_cmd;
   if (mode == ControlMode::GOAL_APPROACH) {
     v_cmd = clamp(v_cmd, 0.0, max_goal_approach_v_);
     if (distance_to_goal > goal_tolerance_ && goal_approach_translation_allowed) {
@@ -195,6 +224,7 @@ geometry_msgs::msg::TwistStamped TimeAwareLQRController::computeVelocityCommands
   v_cmd = clamp(
     command_filter_alpha_ * v_cmd + (1.0 - command_filter_alpha_) * last_v_cmd_,
     0.0, max_v_);
+  const double speed_after_command_filter = v_cmd;
   w_cmd = clamp(
     command_filter_alpha_ * w_cmd + (1.0 - command_filter_alpha_) * last_w_cmd_,
     -max_w_, max_w_);
@@ -207,6 +237,7 @@ geometry_msgs::msg::TwistStamped TimeAwareLQRController::computeVelocityCommands
   } else if (distance_to_goal > goal_tolerance_) {
     v_cmd = std::max(v_cmd, std::min(min_tracking_v_, max_v_));
   }
+  const double final_v_cmd = v_cmd;
 
   publishDebugVisualization(projection, reference, stamp);
   writeCsvDebug(
@@ -230,6 +261,47 @@ geometry_msgs::msg::TwistStamped TimeAwareLQRController::computeVelocityCommands
       goal_checker_reached ? "true" : "false",
       projection.segment_index, projection.yaw, projection.kappa,
       reference_exhausted ? "true" : "false", near_path_end ? "true" : "false");
+
+    const char * speed_reason = "none";
+    if (mode == ControlMode::INFEASIBLE_TIME_TRACKING) {
+      speed_reason = "infeasible_fastest_tracking_v";
+    } else if (heading_error_limited) {
+      speed_reason = "heading_error";
+    } else if (mode == ControlMode::GOAL_APPROACH) {
+      if (speed_after_goal_slowdown + kEps < speed_after_max_limit) {
+        speed_reason = "near_goal_slowdown";
+      } else if (speed_after_accel_limit + kEps < speed_after_goal_slowdown) {
+        speed_reason = "acceleration_limit";
+      } else if (speed_after_command_filter + kEps < speed_after_accel_limit) {
+        speed_reason = "command_filter";
+      } else {
+        speed_reason = "goal_approach_limit";
+      }
+    } else if (speed_after_goal_slowdown + kEps < speed_after_max_limit) {
+      speed_reason = "near_goal_slowdown";
+    } else if (speed_after_accel_limit + kEps < speed_after_goal_slowdown) {
+      speed_reason = "acceleration_limit";
+    } else if (speed_after_command_filter + kEps < speed_after_accel_limit) {
+      speed_reason = "command_filter";
+    } else if (speed_after_max_limit + kEps < speed_after_lqr) {
+      speed_reason = "max_speed_limit";
+    } else if (time_aggressiveness_applied) {
+      speed_reason = "time_aggressiveness";
+    }
+
+    RCLCPP_INFO_THROTTLE(
+      node->get_logger(), *node->get_clock(), 1000,
+      "[time_controller] dist=%.2fm path_rem=%.2fm time_left=%.2fs req_v=%.3f "
+      "aggr=%.2f aggr_raw=%.3f aggr_v=%.3f sched_err=%.2fm raw_v=%.3f "
+      "time_v=%.3f curve_v=%.3f lqr_v=%.3f max_v_stage=%.3f "
+      "slow_v=%.3f accel_v=%.3f final_v=%.3f final_w=%.3f max_v_param=%.3f "
+      "fastest_v_param=%.3f odom_vx=%.3f mode=%s reason=%s",
+      distance_to_goal, path_remaining, requested_time_remaining, required_average_speed,
+      time_aggressiveness_, aggressive_speed_before_clamp, aggressive_speed_after_clamp,
+      schedule_error_s, raw_desired_linear_speed, speed_after_time_logic,
+      speed_after_curvature_limit, speed_after_lqr, speed_after_max_limit,
+      speed_after_goal_slowdown, speed_after_accel_limit, final_v_cmd, w_cmd,
+      max_v_, fastest_tracking_v_, velocity.linear.x, modeToString(mode), speed_reason);
   }
 
   last_v_cmd_ = v_cmd;

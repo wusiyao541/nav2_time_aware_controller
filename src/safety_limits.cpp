@@ -50,7 +50,7 @@ const char * TimeAwareLQRController::modeToString(ControlMode mode) const
 {
   switch (mode) {
     case ControlMode::NORMAL_LQR_TRACKING:
-      return "NORMAL_LQR_TRACKING";
+      return "FEASIBLE_TIME_TRACKING";
     case ControlMode::INFEASIBLE_TIME_TRACKING:
       return "INFEASIBLE_TIME_TRACKING";
     case ControlMode::GOAL_APPROACH:
